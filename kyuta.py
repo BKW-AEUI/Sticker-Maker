@@ -47,6 +47,7 @@ MESSAGES = [
 
 def find_font():
     cands = sorted(glob.glob(str(BASE / "assets" / "fonts" / "*.[to]t[fc]")))
+    cands += sorted(glob.glob(str(BASE / "*.[to]t[fc]")))   # 一番上の階層に置かれた場合も探す
     cands += [  # 同梱フォントが無い場合のシステムフォント
         "C:/Windows/Fonts/meiryob.ttc", "C:/Windows/Fonts/meiryo.ttc",
         "C:/Windows/Fonts/YuGothB.ttc", "C:/Windows/Fonts/msgothic.ttc",
