@@ -5,15 +5,29 @@ from datetime import datetime
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageChops
 
-BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))   # exe化後も動く
+FROZEN = getattr(sys, "frozen", False)                         # exe化されているか
+BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))   # 素材（assets）の場所
+APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).parent
 PARTS = BASE / "assets" / "parts"
-OUTPUT = Path(__file__).parent / "output"
+CHARS = BASE / "assets" / "chars"        # 完成した1枚絵のポーズ（r1〜r4：星の段階ごとのフォルダ）
+OUTPUT = APP_DIR / "output"                                    # exeの隣に保存（一時フォルダに入れない）
 
 SIZE = 1024                      # 全パーツ共通のキャンバスサイズ
 DPI, STICKER_MM = 300, 60        # シールは60mm角 / 300dpi
 PX = int(STICKER_MM / 25.4 * DPI)
 NAME_MAX = 6
-RARE_CHANCE = 0.03
+# レア度（★の数）。しきい値は「乱数がこの値より小さければその段階」。
+#   ★★★★ 1% / ★★★ 9% / ★★ 30% / ★ 60%
+RARITY_STEPS = [(0.01, 4), (0.10, 3), (0.40, 2)]    # それ以外は★1
+FORCE_RARITY = None     # 動作確認用：1〜4 を入れるとその段階に固定（確認後は必ず None に戻す）
+RARITY_NOTE = {         # どの段階も「良さ」を伝える言葉にする（がっかり防止）
+    1: "いちばん なかよしの きゅー太！",
+    2: "ちょっと めずらしい きゅー太！",
+    3: "キラキラの めずらしい きゅー太！",
+    4: "スーパーレア！ すごい きゅー太！",
+}
+RARITY_COLOR = {1: (170, 170, 170), 2: (90, 170, 255), 3: (255, 190, 40), 4: (255, 130, 0)}   # 星・縁の色
+RARITY_BORDER = {1: 3, 2: 10, 3: 16, 4: 22}                                                   # シールの縁の太さ
 
 COLORS = {
     "あか": (255, 125, 125), "オレンジ": (255, 175, 95),
@@ -27,6 +41,11 @@ FACE_ADJ = {"face01": "げんきな", "face02": "ねぼすけな", "face03": "�
             "face04": "いたずらずきな", "face05": "はずかしがりやの"}
 HAT_NAME = {"hat01": "パーティーぼうの", "hat02": "おでかけぼうの", "hat03": "おうかんの",
             "hat04": "コックさんの", "hat05": "リボンの", None: ""}
+# ポーズごとの診断名・ラッキーアイテム（ポーズを足したらここに1行足す。無ければ自動で決まる）
+POSE_ADJ = {"thumbsup": "げんきな", "coffee": "のんびりやの", "dango": "たべしんぼうの",
+            "guitar": "おんがくずきの", "sleep": "ねぼすけな"}
+POSE_ITEM = {"thumbsup": "サムズアップ", "coffee": "コーヒー", "dango": "おだんご",
+             "guitar": "ギター", "sleep": "リュック"}
 ITEM_NAME = {"item01": "ふうせん", "item02": "おほしさま", "item03": "おはな",
              "item04": "ハート", "item05": "アイス", None: "なし"}
 MESSAGES = [
@@ -93,36 +112,112 @@ def _gold_background():
     return out
 
 
+def _sparkles(seed, n):
+    """4つ角のキラキラを、背景の上に散らす（位置は入力から決まるので毎回同じ）"""
+    r = random.Random(seed ^ 0x5EED)
+    layer = Image.new("RGBA", (SIZE * 2, SIZE * 2), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    for _ in range(n):
+        x, y = r.randint(200, SIZE - 200) * 2, r.randint(160, SIZE - 160) * 2
+        a = r.randint(26, 58) * 2
+        d.polygon([(x, y - a), (x + a * 0.28, y - a * 0.28), (x + a, y), (x + a * 0.28, y + a * 0.28),
+                   (x, y + a), (x - a * 0.28, y + a * 0.28), (x - a, y), (x - a * 0.28, y - a * 0.28)],
+                  fill=(255, 255, 255, 235))
+    return layer.resize((SIZE, SIZE), Image.LANCZOS)
+
+
+def _recolor_fur(body, fur_mask, rgb, vref=0.80):
+    """体の絵のうち「毛」の部分（fur_mask）だけを、好きな色に差し替える。
+    明るさは元の絵のまま使うので、濃い毛→濃い色、薄いおなか→薄い色になる。"""
+    r, g, b, a = body.split()
+    v = ImageChops.lighter(ImageChops.lighter(r, g), b)                       # 各ピクセルの明るさ
+    new = Image.merge("RGB", [v.point(lambda x, c=c: min(255, int(c * min(x / (255 * vref), 1.12)))) for c in rgb])
+    mixed = Image.composite(new, Image.merge("RGB", (r, g, b)), fur_mask)     # 毛の所だけ差し替え
+    out = mixed.convert("RGBA"); out.putalpha(a)
+    return out
+
+
+def _poses(folder):
+    return sorted(p for p in folder.glob("*.png") if not p.stem.endswith("_mask")) if folder.exists() else []
+
+
+def _pose_pool(rarity):
+    """その段階のポーズ。無ければ1つ下の段階から探す（★4の絵が未完成でも動く）"""
+    for lv in range(rarity, 0, -1):
+        files = _poses(CHARS / f"r{lv}")
+        if files:
+            return files
+    return []
+
+
+def _compose_pose(month, day, color, rng):
+    """1枚絵モード：星の段階 → ポーズを選ぶ → リュックを好きな色に → 背景に重ねる"""
+    r = rng.random()
+    rarity = next((lv for th, lv in RARITY_STEPS if r < th), 1)
+    if FORCE_RARITY in (1, 2, 3, 4):
+        rarity = FORCE_RARITY
+    pose = rng.choice(_pose_pool(rarity))
+    bg = _pick(rng, "background")
+
+    canvas = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    if rarity == 4:
+        canvas = Image.alpha_composite(canvas, _gold_background())
+    elif bg:
+        canvas = Image.alpha_composite(canvas, Image.open(bg).convert("RGBA"))
+    if rarity >= 3:
+        canvas = Image.alpha_composite(canvas, _sparkles(make_seed(month, day, color), 10 if rarity == 3 else 18))
+
+    art = Image.open(pose).convert("RGBA")
+    mask = pose.with_name(pose.stem + "_mask.png")
+    if mask.exists():                                    # リュックだけ好きな色に（体の色は変えない）
+        art = _recolor_fur(art, Image.open(mask).convert("L"), COLORS[color], vref=0.86)
+    canvas = Image.alpha_composite(canvas, art)
+    return canvas, {"background": bg, "pose": pose, "face": None, "outfit": None, "hat": None, "item": None}, rng, rarity
+
+
 def compose_character(month, day, color):
-    """入力 → (キャラ画像, 選ばれたパーツ, rng, レアか)。同じ入力なら必ず同じ結果。"""
+    """入力 → (キャラ画像, 選ばれたパーツ, rng, レア度1〜4)。同じ入力なら必ず同じ結果。"""
     rng = random.Random(make_seed(month, day, color))
+    if any(_poses(CHARS / f"r{lv}") for lv in range(1, 5)):
+        return _compose_pose(month, day, color, rng)
     ch = {"background": _pick(rng, "background"), "face": _pick(rng, "face"),
           "outfit": _pick(rng, "outfit", 0.15), "hat": _pick(rng, "hat", 0.3),
           "item": _pick(rng, "item", 0.3)}
-    rare = rng.random() < RARE_CHANCE
+    r = rng.random()                     # レア度を決める（乱数の消費数は今までと同じ）
+    rarity = next((lv for th, lv in RARITY_STEPS if r < th), 1)
+    if FORCE_RARITY in (1, 2, 3, 4):
+        rarity = FORCE_RARITY
 
     canvas = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    if rare:
-        canvas = Image.alpha_composite(canvas, _gold_background())
+    if rarity == 4:
+        canvas = Image.alpha_composite(canvas, _gold_background())      # ★4：金の背景
     elif ch["background"]:
         canvas = Image.alpha_composite(canvas, Image.open(ch["background"]).convert("RGBA"))
+    if rarity >= 3:                                                      # ★3以上：キラキラを重ねる
+        canvas = Image.alpha_composite(canvas, _sparkles(make_seed(month, day, color), 10 if rarity == 3 else 18))
 
     body = Image.open(PARTS / "body" / "base.png").convert("RGBA")
-    tint = Image.new("RGBA", body.size, COLORS[color] + (255,))
-    canvas = Image.alpha_composite(canvas, ImageChops.multiply(body, tint))  # 白い所だけ色が付く
+    fur_path = PARTS / "body" / "fur.png"
+    if fur_path.exists():          # 本物の絵：毛の部分だけ色を差し替える（赤いリュック等はそのまま）
+        canvas = Image.alpha_composite(canvas, _recolor_fur(body, Image.open(fur_path).convert("L"), COLORS[color]))
+    else:                          # 仮の絵：白い体に色を掛ける
+        tint = Image.new("RGBA", body.size, COLORS[color] + (255,))
+        canvas = Image.alpha_composite(canvas, ImageChops.multiply(body, tint))
     for cat in ("face", "outfit", "hat", "item"):
         if ch[cat]:
             canvas = Image.alpha_composite(canvas, Image.open(ch[cat]).convert("RGBA"))
-    return canvas, ch, rng, rare
+    return canvas, ch, rng, rarity
 
 
-def make_fortune(ch, rng, color, rare):
+def make_fortune(ch, rng, color, rarity):
     stem = lambda k: ch[k].stem if ch[k] else None
-    title = f"{HAT_NAME.get(stem('hat'), '')}{FACE_ADJ.get(stem('face'), 'ふしぎな')}きゅー太"
-    if rare:
-        title = "スーパーレア！" + title
+    # 表情パーツが無い間は、診断名の形容詞を入力から決める
+    pose = ch["pose"].stem if ch.get("pose") else None
+    adj = FACE_ADJ.get(stem("face")) if ch["face"] else (POSE_ADJ.get(pose) or rng.choice(list(FACE_ADJ.values())))
+    title = f"{HAT_NAME.get(stem('hat'), '')}{adj or 'ふしぎな'}きゅー太"
     return {"title": title, "message": rng.choice(MESSAGES), "lucky_color": color,
-            "lucky_item": ITEM_NAME.get(stem("item"), "ひみつ"), "rare": rare}
+            "lucky_item": POSE_ITEM.get(pose) or ITEM_NAME.get(stem("item"), "ひみつ"),
+            "rarity": rarity, "rare": rarity >= 4, "rarity_note": RARITY_NOTE[rarity]}
 
 
 def _fit_font(draw, text, font_path, max_px, max_w):
@@ -141,7 +236,7 @@ def next_number():
     return len(list(OUTPUT.glob("*.png"))) + 1
 
 
-def make_sticker(char_img, name, title, number, save=True):
+def make_sticker(char_img, name, title, number, save=True, rarity=1):
     """印刷用（60mm角・300dpi）のシール画像を作る。"""
     fp = find_font()
     s = PX
@@ -151,7 +246,11 @@ def make_sticker(char_img, name, title, number, save=True):
     sticker.paste((255, 255, 255, 255), (0, 0), big.resize((s, s), Image.LANCZOS))
 
     d = ImageDraw.Draw(sticker)
-    d.rounded_rectangle((4, 4, s - 5, s - 5), radius=75, outline=(225, 225, 225, 255), width=3)
+    bw = RARITY_BORDER[rarity]                                    # レア度で縁が太く・色付きになる
+    bcol = (225, 225, 225) if rarity == 1 else RARITY_COLOR[rarity]
+    d.rounded_rectangle((2, 2, s - 3, s - 3), radius=75, outline=bcol + (255,), width=bw)
+    fs = ImageFont.truetype(fp, int(s * 0.075))                   # 左上に★
+    d.text((bw + 16, bw + 8), "★" * rarity, font=fs, fill=RARITY_COLOR[rarity] + (255,))
 
     ill = char_img.copy()
     ill.thumbnail((int(s * 0.68), int(s * 0.68)), Image.LANCZOS)
