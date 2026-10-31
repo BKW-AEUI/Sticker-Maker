@@ -62,7 +62,7 @@ if res is None:
             time.sleep(0.15); bar.progress((i + 1) / 12, text="きゅー太が しんだんちゅう…" + "." * (i % 4))
         img, ch, rng, rare = K.compose_character(month, day, color)
         fortune = K.make_fortune(ch, rng, color, rare)
-        sticker, _ = K.make_sticker(img, name.strip(), fortune["title"], 0, save=False)  # 保存しない
+        sticker, _ = K.make_sticker(img, name.strip(), fortune["title"], 0, save=False, rarity=fortune["rarity"])  # 保存しない
         buf = io.BytesIO(); sticker.save(buf, format="PNG", dpi=(K.DPI, K.DPI))
         st.session_state.result = {"img": img, "fortune": fortune, "name": name.strip(),
                                    "sticker": sticker, "png": buf.getvalue()}
@@ -71,11 +71,13 @@ if res is None:
         st.caption("①〜④ ぜんぶ えらぶと ボタンが おせるよ")
 else:
     f = res["fortune"]
-    if f["rare"]:
+    col = "#%02x%02x%02x" % K.RARITY_COLOR[f["rarity"]]
+    st.markdown(f'<div class="rare" style="color:{col}">{"★" * f["rarity"]}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div style="text-align:center">{f["rarity_note"]}</div>', unsafe_allow_html=True)
+    if f["rarity"] >= 3:
         st.balloons()
-        st.markdown('<div class="rare">✨ スーパーレア！ ✨</div>', unsafe_allow_html=True)
     st.markdown(f'<div style="text-align:center">{res["name"]} は…</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="title-big">{f["title"].replace("スーパーレア！", "")}！</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="title-big">{f["title"]}！</div>', unsafe_allow_html=True)
 
     c1, c2 = st.columns([1, 1], vertical_alignment="center")
     c1.image(res["img"], width="stretch")

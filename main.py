@@ -32,8 +32,19 @@ class App:
         self._fonts = {}
         self.clock = pygame.time.Clock()
         self.buttons = []
-        self.sample = self._surf(K.compose_character(6, 15, "ピンク")[0], 380)
+        self.sample = self._surf(self._title_image(), 380)
         self.reset()
+
+    def _title_image(self):
+        """タイトル画面のキャラ。assets/title.png があればそれを使い、無ければ仮のきゅー太。"""
+        p = K.BASE / "assets" / "title.png"
+        if p.exists():
+            im = Image.open(p).convert("RGBA")
+            side = max(im.size)                      # 正方形の透明な台紙にのせる（ゆがみ防止）
+            sq = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+            sq.paste(im, ((side - im.width) // 2, (side - im.height) // 2), im)
+            return sq
+        return K.compose_character(6, 15, "ピンク")[0]
 
     # ---------- 状態 ----------
     def reset(self):
@@ -69,7 +80,7 @@ class App:
 
     def _surf(self, pil, size):
         pil = pil.resize((size, size), Image.LANCZOS)
-        return pygame.image.fromstring(pil.tobytes(), pil.size, "RGBA").convert_alpha()
+        return pygame.image.frombytes(pil.tobytes(), pil.size, "RGBA").convert_alpha()
 
     def title_bar(self, s):
         self.text(s, 64, BROWN, center=(W // 2, 70))
@@ -110,7 +121,7 @@ class App:
     def draw_title(self):
         bounce = abs(math.sin(self.t * 3)) * 28
         self.screen.blit(self.sample, (W // 2 - 190, 150 - bounce))
-        self.text("きゅー太 しんだん", 92, ORANGE, center=(W // 2, 90))
+        self.text("きゅー太 占い", 92, ORANGE, center=(W // 2, 90))
         self.text("たんじょうびと すきないろで  きみだけの きゅー太を つくろう！", 34, BROWN, center=(W // 2, 560))
         self.button((W // 2 - 180, 600, 360, 90), "スタート！", ORANGE, 52, bid="start")
 
@@ -190,19 +201,36 @@ class App:
         self.text("ドキドキ…", 44, ORANGE, center=(cx, cy))
         if self.t > 2.4: self.go("result")
 
+    def sparkles(self, n, t):
+        """レア度に応じて、結果画面にキラキラを舞わせる"""
+        for i in range(n):
+            ph = t * 2 + i
+            cx = (i * 197 + 80) % W + 25 * math.sin(ph * 0.7)
+            cy = (i * 131 + 60) % H + 20 * math.cos(ph * 0.9)
+            s = 6 + 12 * abs(math.sin(ph))
+            col = [(255, 215, 70), (255, 255, 255), (150, 210, 255)][i % 3]
+            pygame.draw.polygon(self.screen, col, [(cx, cy - s), (cx + s * 0.3, cy), (cx, cy + s), (cx - s * 0.3, cy)])
+            pygame.draw.polygon(self.screen, col, [(cx - s, cy), (cx, cy - s * 0.3), (cx + s, cy), (cx, cy + s * 0.3)])
+
     def draw_result(self):
         t, f = self.t, self.fortune
         if f["rare"] and int(t * 6) % 2 == 0 and t < 3:
             pygame.draw.rect(self.screen, (255, 245, 170), (0, 0, W, H))
+        if f["rarity"] >= 2 and t > 0.5:
+            self.sparkles({2: 8, 3: 16, 4: 28}[f["rarity"]], t)
         pop = min(1, t / 0.5); size = int(460 * (0.6 + 0.4 * pop))
         bounce = abs(math.sin(t * 2.5)) * 16 if t > 0.6 else 0
         s = pygame.transform.smoothscale(self.char_surf, (size, size))
         self.screen.blit(s, (60 + (460 - size) // 2, 130 + (460 - size) // 2 - bounce))
         x = 580
+        if t > 0.7:
+            self.text("★" * f["rarity"], 54, K.RARITY_COLOR[f["rarity"]], center=(290, 622))
+            self.text(f["rarity_note"], 26, BROWN, center=(290, 676))
         self.text(f"{self.name}は…", 40, BROWN, topleft=(x, 70), alpha=int(255 * min(1, t / 0.4)))
         if t > 0.7:
-            self.text(f["title"] + "！" if not f["rare"] else f["title"], 48 if len(f["title"]) < 14 else 38,
-                      (255, 120, 40) if not f["rare"] else (230, 150, 0), topleft=(x, 130))
+            ttl, size = f["title"] + "！", 48
+            while self.font(size).size(ttl)[0] > 660 and size > 24: size -= 2
+            self.text(ttl, size, (255, 120, 40) if not f["rare"] else (230, 150, 0), topleft=(x, 130))
         if t > 1.5:
             a = int(255 * min(1, (t - 1.5) / 0.6))
             words, line, y = f["message"], "", 230   # 折り返し
@@ -222,7 +250,7 @@ class App:
 
     def click_result(self, b):
         self.number = K.next_number()
-        self.sticker, self.sticker_path = K.make_sticker(self.char_img, self.name, self.fortune["title"], self.number)
+        self.sticker, self.sticker_path = K.make_sticker(self.char_img, self.name, self.fortune["title"], self.number, rarity=self.fortune["rarity"])
         self.sticker_surf = self._surf(self.sticker, 380)
         self.go("done")
 
@@ -249,4 +277,14 @@ class App:
 
 
 if __name__ == "__main__":
-    App(fullscreen="--fullscreen" in sys.argv).run()
+    if "--selftest" in sys.argv:      # 画面なしの動作確認（素材・フォント・保存先）
+        img, ch, rng, rare = K.compose_character(5, 12, "ピンク")
+        f = K.make_fortune(ch, rng, "ピンク", rare)
+        _, p = K.make_sticker(img, "テスト", f["title"], K.next_number())
+        print("OK:", p); sys.exit(0)
+    try:
+        App(fullscreen="--fullscreen" in sys.argv).run()
+    except Exception:                 # 画面なし(--windowed)でもエラーが分かるようにログを残す
+        import traceback
+        (K.APP_DIR / "error.log").write_text(traceback.format_exc(), encoding="utf-8")
+        raise

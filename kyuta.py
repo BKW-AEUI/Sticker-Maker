@@ -1,6 +1,6 @@
 """きゅー太しんだん：コアロジック（診断・キャラ合成・シール画像生成）
 画面(main.py)から独立しているので、単体テストや素材チェックにも使えます。"""
-import hashlib, random, sys, glob
+import hashlib, json, math, random, sys, glob
 from datetime import datetime
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageChops
@@ -44,6 +44,11 @@ HAT_NAME = {"hat01": "パーティーぼうの", "hat02": "おでかけぼうの
 # ポーズごとの診断名・ラッキーアイテム（ポーズを足したらここに1行足す。無ければ自動で決まる）
 POSE_ADJ = {"thumbsup": "げんきな", "coffee": "のんびりやの", "dango": "たべしんぼうの",
             "guitar": "おんがくずきの", "sleep": "ねぼすけな"}
+# 頭につける小物の名前（診断名の頭につく）。自分で絵を足した小物は、ここに無ければ「おしゃれな」になる
+ACC_NAME = {"headband": "カチューシャの", "ribbon": "リボンの", "catears": "ねこみみの",
+            "star": "おほしさまの", "flower": "おはなの"}
+ACC_KINDS = ["flower"]      # くじ引きに入れる小物。増やすなら "headband" "ribbon" "catears" "star" を足す
+ACC_NONE = {1: 0.40, 2: 0.25, 3: 0.10, 4: 0.0}      # 小物が「なし」になる確率（レアなほどおしゃれ）
 POSE_ITEM = {"thumbsup": "サムズアップ", "coffee": "コーヒー", "dango": "おだんご",
              "guitar": "ギター", "sleep": "リュック"}
 ITEM_NAME = {"item01": "ふうせん", "item02": "おほしさま", "item03": "おはな",
@@ -137,6 +142,73 @@ def _recolor_fur(body, fur_mask, rgb, vref=0.80):
     return out
 
 
+def _heads():
+    """ポーズごとの頭の位置 [中心x, 中心y, 横の半径, 縦の半径]（assets/chars/heads.json）"""
+    p = CHARS / "heads.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+def _head_accessory(kind, head, rgb):
+    """カチューシャなどをコードで描く（絵の素材は不要・色違いも自由）。頭の楕円に沿わせる。"""
+    cx, cy, rx, ry = head
+    S, k = 2, rx / 190                                  # 2倍で描いて縮小／頭の大きさに合わせて拡大縮小
+    im = Image.new("RGBA", (SIZE * S, SIZE * S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    ink, fill = (40, 40, 40, 255), tuple(rgb) + (255,)
+    P = lambda a, g=1.0: (cx + rx * g * math.cos(math.radians(a)), cy + ry * g * math.sin(math.radians(a)))
+    sc = lambda pts: [(x * S, y * S) for x, y in pts]
+    w = lambda v: max(1, int(v * k * S))
+
+    def band():
+        box = [(cx - rx) * S, (cy - ry) * S, (cx + rx) * S, (cy + ry) * S]
+        d.arc(box, 207, 333, fill=ink, width=w(34)); d.arc(box, 207, 333, fill=fill, width=w(22))
+
+    def circle(x, y, r, f, o=ink, ow=5):
+        d.ellipse([(x - r) * S, (y - r) * S, (x + r) * S, (y + r) * S], fill=f, outline=o, width=w(ow))
+
+    if kind in ("headband", "ribbon", "catears", "star"):
+        band()
+    if kind == "ribbon":
+        x, y = P(300)
+        for dx in (-1, 1):
+            d.polygon(sc([(x, y), (x + dx * 58 * k, y - 34 * k), (x + dx * 58 * k, y + 34 * k)]), fill=fill, outline=ink, width=w(5))
+        circle(x, y, 16 * k, fill)
+    elif kind == "catears":
+        for a in (238, 302):
+            x, y = P(a)
+            ox, oy = math.cos(math.radians(a)), math.sin(math.radians(a))
+            tip = (x + ox * 80 * k, y + oy * 80 * k)
+            base = [(x - 36 * k, y + 8 * k), (x + 36 * k, y + 8 * k)]
+            d.polygon(sc([base[0], tip, base[1]]), fill=fill, outline=ink, width=w(6))
+            tip2 = (x + ox * 56 * k, y + oy * 56 * k)
+            d.polygon(sc([(x - 18 * k, y + 4 * k), tip2, (x + 18 * k, y + 4 * k)]), fill=(255, 205, 215, 255))
+    elif kind == "star":
+        x, y = cx, cy - ry - 6 * k
+        pts = [(x + (46 if i % 2 == 0 else 20) * k * math.cos(i * math.pi / 5 - math.pi / 2),
+                y + (46 if i % 2 == 0 else 20) * k * math.sin(i * math.pi / 5 - math.pi / 2)) for i in range(10)]
+        d.polygon(sc(pts), fill=(255, 225, 60, 255), outline=ink, width=w(6))
+    elif kind == "flower":
+        x, y = P(302, 0.97)
+        for i in range(5):
+            a = i * 2 * math.pi / 5 - math.pi / 2
+            circle(x + 30 * k * math.cos(a), y + 30 * k * math.sin(a), 24 * k, fill, ow=4)
+        circle(x, y, 17 * k, (255, 225, 70, 255), ow=4)
+    return im.resize((SIZE, SIZE), Image.LANCZOS)
+
+
+def _png_accessory(path, head):
+    """自分で作った小物の絵（assets/accessories/head/*.png）を、頭の上に置く"""
+    cx, cy, rx, ry = head
+    a = Image.open(path).convert("RGBA")
+    box = a.getchannel("A").point(lambda v: 255 if v > 20 else 0).getbbox()
+    a = a.crop(box) if box else a
+    sc = (rx * 2.1) / a.width
+    a = a.resize((round(a.width * sc), round(a.height * sc)), Image.LANCZOS)
+    layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    layer.paste(a, (round(cx - a.width / 2), round(cy - ry * 0.8 - a.height)), a)   # 下の端を頭のてっぺんに合わせる
+    return layer
+
+
 def _poses(folder):
     return sorted(p for p in folder.glob("*.png") if not p.stem.endswith("_mask")) if folder.exists() else []
 
@@ -167,12 +239,22 @@ def _compose_pose(month, day, color, rng):
     if rarity >= 3:
         canvas = Image.alpha_composite(canvas, _sparkles(make_seed(month, day, color), 10 if rarity == 3 else 18))
 
+    head = _heads().get(pose.stem)                       # 頭につける小物（乱数の消費数は毎回同じ）
+    roll, color_name = rng.random(), rng.choice(list(COLORS))
+    png_files = sorted((BASE / "assets" / "accessories" / "head").glob("*.png"))
+    kind = rng.choice(ACC_KINDS + png_files)
+    acc = None if (not head or roll < ACC_NONE[rarity]) else kind
+
     art = Image.open(pose).convert("RGBA")
     mask = pose.with_name(pose.stem + "_mask.png")
     if mask.exists():                                    # リュックだけ好きな色に（体の色は変えない）
         art = _recolor_fur(art, Image.open(mask).convert("L"), COLORS[color], vref=0.86)
     canvas = Image.alpha_composite(canvas, art)
-    return canvas, {"background": bg, "pose": pose, "face": None, "outfit": None, "hat": None, "item": None}, rng, rarity
+    if acc is not None:
+        layer = _png_accessory(acc, head) if isinstance(acc, Path) else _head_accessory(acc, head, COLORS[color_name])
+        canvas = Image.alpha_composite(canvas, layer)
+    name = acc.stem if isinstance(acc, Path) else acc
+    return canvas, {"background": bg, "pose": pose, "acc": name, "face": None, "outfit": None, "hat": None, "item": None}, rng, rarity
 
 
 def compose_character(month, day, color):
@@ -214,7 +296,9 @@ def make_fortune(ch, rng, color, rarity):
     # 表情パーツが無い間は、診断名の形容詞を入力から決める
     pose = ch["pose"].stem if ch.get("pose") else None
     adj = FACE_ADJ.get(stem("face")) if ch["face"] else (POSE_ADJ.get(pose) or rng.choice(list(FACE_ADJ.values())))
-    title = f"{HAT_NAME.get(stem('hat'), '')}{adj or 'ふしぎな'}きゅー太"
+    acc = ch.get("acc")
+    acc_prefix = ACC_NAME.get(acc, "おしゃれな") if acc else ""
+    title = f"{acc_prefix}{HAT_NAME.get(stem('hat'), '')}{adj or 'ふしぎな'}きゅー太"
     return {"title": title, "message": rng.choice(MESSAGES), "lucky_color": color,
             "lucky_item": POSE_ITEM.get(pose) or ITEM_NAME.get(stem("item"), "ひみつ"),
             "rarity": rarity, "rare": rarity >= 4, "rarity_note": RARITY_NOTE[rarity]}

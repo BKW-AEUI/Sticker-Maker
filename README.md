@@ -1,22 +1,30 @@
-# きゅー太しんだん デモ
+# きゅー太しんだん
 
-## 動かし方（Windows / Mac 共通）
-```
-pip install pygame pillow
-python make_placeholders.py   # 仮パーツ生成（初回のみ。本物の素材ができたら不要）
-python main.py                # ウィンドウで起動（本番は --fullscreen）
-```
-- 完成したシールは `output/` に 60mm角・300dpi のPNGで保存されます（番号つき）
-- 終了は Ctrl+Q（ESCでは終了しません）／60秒放置で自動的にタイトルへ戻ります
-- 日本語フォントは `assets/fonts/` に TTF/OTF を入れると優先使用。無ければWindows標準フォント(メイリオ等)を使います
+誕生日と好きな色から、きゅー太があなたを診断して、名前入りのシールを作るデモ（ローカル完結・ネット不使用）。
 
-## 素材の差し替え
-`assets/parts/` の各フォルダ（background / body / face / outfit / hat / item）のPNGを差し替えるだけ。
-全パーツ 1024x1024・透過・きゅー太の正しい位置に描いた状態で書き出す。
-body/base.png は「白塗り＋黒線」（色は好きな色で自動で乗算）。
-パーツを足したら kyuta.py の FACE_ADJ / HAT_NAME / ITEM_NAME に表示名を1行追加。
+## 動かし方（Windows）
+```
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install pygame-ce pillow
+.\.venv\Scripts\python.exe make_placeholders.py   # 背景の仮素材を作る（初回のみ）
+.\.venv\Scripts\python.exe main.py                # 起動（本番は --fullscreen）
+```
+- 終了は Ctrl+Q。60秒放置でタイトルへ戻る。
+- 完成したシールは `output/`（60mm角・300dpi）に番号つきで保存される。
+- exe化は `build.bat`（USBに入れて持ち運べる）。
+
+## しくみ
+- 誕生日と色から数字を作り、その数字でくじ引き → 同じ入力なら同じ結果。
+- 星の段階（★1〜★4）→ ポーズ（assets/chars/r1〜r4）→ リュックの色（好きな色）→ 背景 → 頭の小物（お花）の順に決まる。
+- ★が多いほど、レアなポーズと小物が出やすい。
+
+## 素材の足し方
+- ポーズ: `python prepare_pose.py 絵.png 段階(1〜4) 名前`（要 numpy, scipy）。頭の位置を `assets/chars/heads.json` に書くと小物が付く。
+- 診断名・ラッキーアイテムは `kyuta.py` の POSE_ADJ / POSE_ITEM に1行足す。
+- 確率は `kyuta.py` の RARITY_STEPS / ACC_NONE。
+
+## ブラウザ版
+`streamlit_app.py`（承認用の簡易版）。Streamlit Community Cloud にデプロイして使う。
 
 ## ファイル
-- kyuta.py … 診断・合成・シール生成（画面なしで単体利用可）
-- main.py … 画面（タイトル→誕生日→色→名前→診断→シール）
-- check_all.py … 組み合わせ一覧画像で目視チェック
+kyuta.py（ロジック）/ main.py（画面）/ streamlit_app.py（ブラウザ版）/ prepare_pose.py（素材変換）/ make_placeholders.py（仮素材）/ check_all.py（確認用）
