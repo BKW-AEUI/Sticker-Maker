@@ -2,7 +2,7 @@
 ・フォームの回答は、自動でスプレッドシートに溜まる（Google Cloudの設定は不要）
 ・Secrets（設定）が無いときは何もしない＝ログ無しでも普通に動く
 ・送信は裏で行い、失敗してもアプリは止めない（状態は ?debug=1 を付けたURLで見られる）
-・名前は記録しない（企画書の「個人情報を扱わない」を守るため）
+・名前（ニックネーム）も記録する。本番で子どもが使うときは、Secretsを消して記録を止めること
 ・フォームの質問は1つだけ。中身は「|」区切りで送る（シート側のSPLITで列に分ける）"""
 import threading
 from datetime import datetime, timedelta, timezone
@@ -15,7 +15,7 @@ import streamlit as st
 JST = timezone(timedelta(hours=9))
 
 # 送る項目の順番（シートで列に分けるときの見出し）
-HEADERS = ["イベント", "セッション", "月", "日", "色", "★", "ポーズ", "小物", "診断名", "メモ"]
+HEADERS = ["イベント", "セッション", "名前", "月日", "色", "★", "ポーズ", "小物", "診断名", "メモ"]
 LAST = "まだ記録していません"      # ?debug=1 で表示される、直近の状態
 
 
@@ -47,7 +47,7 @@ def _send(url, entry, text):
         LAST = f"NG {datetime.now(JST):%H:%M:%S} {type(e).__name__}: {str(e)[:120]}"
 
 
-def log(event, sid, month="", day="", color="", rarity="", pose="", acc="", title="", memo=""):
+def log(event, sid, month="", day="", color="", rarity="", pose="", acc="", title="", memo="", name=""):
     """1件送る。event は「診断」「ダウンロード」「もういちど」「エラー」など。"""
     global LAST
     try:
@@ -55,7 +55,8 @@ def log(event, sid, month="", day="", color="", rarity="", pose="", acc="", titl
         if cfg is None:
             LAST = "設定なし（Secrets未登録）→ 記録しません"
             return None
-        text = "|".join(_clean(v) for v in [event, sid, month, day, color, rarity, pose, acc or "なし", title, memo])
+        md = f"{month}月{day}日" if month and day else ""     # 「4月24日」の文字のまま送る（シールが日付に自動変換しない）
+        text = "|".join(_clean(v) for v in [event, sid, name, md, color, rarity, pose, acc or "なし", title, memo])
         LAST = "送信中…"                                   # 先に表示を変えておく（送信が先に終わっても上書きされない）
         t = threading.Thread(target=_send, args=(*cfg, text), daemon=True)   # 画面を待たせない
         t.start()

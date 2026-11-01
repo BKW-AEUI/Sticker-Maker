@@ -55,7 +55,7 @@ if res is None:
     color = color_label.split(" ", 1)[1] if color_label else None
 
     name = st.text_input(f"④ おなまえ（{K.NAME_MAX}もじまで・ニックネームでOK）", max_chars=K.NAME_MAX, key="name")
-    st.caption("※ 本名・顔写真は使いません。誕生日は年を聞かず、保存もしません。")
+    st.caption("※ 本名・顔写真は使いません。誕生日は年を聞きません。（実験中は、入力した月日・色・名前が記録されます）")
 
     ready = bool(month and day and color and name.strip())
     if st.button("✨ しんだん する！", type="primary", disabled=not ready, width="stretch"):
@@ -69,11 +69,12 @@ if res is None:
             sticker, _ = K.make_sticker(img, name.strip(), fortune["title"], 0, save=False, rarity=fortune["rarity"])  # 保存しない
             buf = io.BytesIO(); sticker.save(buf, format="PNG", dpi=(K.DPI, K.DPI))
             info = dict(month=month, day=day, color=color, rarity=fortune["rarity"],
-                        pose=ch["pose"].stem if ch.get("pose") else "", acc=ch.get("acc"), title=fortune["title"])
+                        pose=ch["pose"].stem if ch.get("pose") else "", acc=ch.get("acc"), title=fortune["title"],
+                        name=name.strip())
             result = {"img": img, "fortune": fortune, "name": name.strip(),
                       "sticker": sticker, "png": buf.getvalue(), "log": info}
         except Exception as e:                  # どんな入力で失敗したかを記録する
-            L.log("エラー", sid, month=month, day=day, color=color, memo=f"{type(e).__name__}: {e}")
+            L.log("エラー", sid, month=month, day=day, color=color, name=name.strip(), memo=f"{type(e).__name__}: {e}")
             st.error("ごめんね、うまくいかなかったよ。べつの日にちで ためしてね")
         if result:
             L.log("診断", sid, **result["log"])
