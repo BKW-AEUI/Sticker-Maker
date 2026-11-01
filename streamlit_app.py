@@ -1,9 +1,10 @@
 """きゅー太しんだん（ブラウザ版・承認用デモ）
 診断・合成・シール生成は kyuta.py をそのまま使用。画面だけStreamlitで作っています。
 起動: streamlit run streamlit_app.py"""
-import io, time
+import io, time, uuid
 import streamlit as st
 import kyuta as K
+import sheet_log as L
 
 st.set_page_config(page_title="きゅー太しんだん", page_icon="🔮", layout="centered")
 
@@ -37,6 +38,7 @@ h1 {text-align:center; color:#ff9f43;}
 st.title("🔮 きゅー太 しんだん")
 st.markdown('<div class="sub">たんじょうびと すきないろで、きみだけの きゅー太を つくろう！</div>', unsafe_allow_html=True)
 
+sid = st.session_state.setdefault("sid", uuid.uuid4().hex[:8])      # 1回の利用ごとの目印（個人は特定しない）
 res = st.session_state.get("result")
 
 if res is None:
@@ -60,13 +62,23 @@ if res is None:
         bar = st.progress(0, text="きゅー太が しんだんちゅう…")
         for i in range(12):
             time.sleep(0.15); bar.progress((i + 1) / 12, text="きゅー太が しんだんちゅう…" + "." * (i % 4))
-        img, ch, rng, rare = K.compose_character(month, day, color)
-        fortune = K.make_fortune(ch, rng, color, rare)
-        sticker, _ = K.make_sticker(img, name.strip(), fortune["title"], 0, save=False, rarity=fortune["rarity"])  # 保存しない
-        buf = io.BytesIO(); sticker.save(buf, format="PNG", dpi=(K.DPI, K.DPI))
-        st.session_state.result = {"img": img, "fortune": fortune, "name": name.strip(),
-                                   "sticker": sticker, "png": buf.getvalue()}
-        st.rerun()
+        result = None
+        try:
+            img, ch, rng, rare = K.compose_character(month, day, color)
+            fortune = K.make_fortune(ch, rng, color, rare)
+            sticker, _ = K.make_sticker(img, name.strip(), fortune["title"], 0, save=False, rarity=fortune["rarity"])  # 保存しない
+            buf = io.BytesIO(); sticker.save(buf, format="PNG", dpi=(K.DPI, K.DPI))
+            info = dict(month=month, day=day, color=color, rarity=fortune["rarity"],
+                        pose=ch["pose"].stem if ch.get("pose") else "", acc=ch.get("acc"), title=fortune["title"])
+            result = {"img": img, "fortune": fortune, "name": name.strip(),
+                      "sticker": sticker, "png": buf.getvalue(), "log": info}
+        except Exception as e:                  # どんな入力で失敗したかを記録する
+            L.log("エラー", sid, month=month, day=day, color=color, memo=f"{type(e).__name__}: {e}")
+            st.error("ごめんね、うまくいかなかったよ。べつの日にちで ためしてね")
+        if result:
+            L.log("診断", sid, **result["log"])
+            st.session_state.result = result
+            st.rerun()
     if not ready:
         st.caption("①〜④ ぜんぶ えらぶと ボタンが おせるよ")
 else:
@@ -94,7 +106,12 @@ else:
     with s2:
         st.caption("60mm角・300dpi の印刷用データです。本番ではこれをスタッフが印刷して手渡しします。")
         st.download_button("⬇ シールを ダウンロード", res["png"], file_name="kyuta_sticker.png",
-                           mime="image/png", width="stretch")
+                           mime="image/png", width="stretch",
+                           on_click=L.log, args=("ダウンロード", sid), kwargs=res["log"])
     if st.button("🔁 もういちど つくる", width="stretch"):
+        L.log("もういちど", sid, **res["log"])
         for k in ("result", "month", "color", "name"): st.session_state.pop(k, None)
         st.rerun()
+
+if st.query_params.get("debug"):                # URLの最後に ?debug=1 を付けると、記録の状態が見える（自分用）
+    st.caption(f"ログ: {L.LAST}")
