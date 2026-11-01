@@ -6,6 +6,14 @@ import streamlit as st
 import kyuta as K
 import sheet_log as L
 
+
+def _log(*args, **kwargs):
+    """記録の失敗（設定ミスやファイルの食い違い）で、アプリを止めない"""
+    try:
+        L.log(*args, **kwargs)
+    except Exception:
+        pass
+
 st.set_page_config(page_title="きゅー太しんだん", page_icon="🔮", layout="centered")
 
 EMOJI = {"あか": "🔴", "オレンジ": "🟠", "きいろ": "🟡", "みどり": "🟢",
@@ -74,10 +82,10 @@ if res is None:
             result = {"img": img, "fortune": fortune, "name": name.strip(),
                       "sticker": sticker, "png": buf.getvalue(), "log": info}
         except Exception as e:                  # どんな入力で失敗したかを記録する
-            L.log("エラー", sid, month=month, day=day, color=color, name=name.strip(), memo=f"{type(e).__name__}: {e}")
+            _log("エラー", sid, month=month, day=day, color=color, name=name.strip(), memo=f"{type(e).__name__}: {e}")
             st.error("ごめんね、うまくいかなかったよ。べつの日にちで ためしてね")
         if result:
-            L.log("診断", sid, **result["log"])
+            _log("診断", sid, **result["log"])
             st.session_state.result = result
             st.rerun()
     if not ready:
@@ -108,9 +116,9 @@ else:
         st.caption("60mm角・300dpi の印刷用データです。本番ではこれをスタッフが印刷して手渡しします。")
         st.download_button("⬇ シールを ダウンロード", res["png"], file_name="kyuta_sticker.png",
                            mime="image/png", width="stretch",
-                           on_click=L.log, args=("ダウンロード", sid), kwargs=res["log"])
+                           on_click=_log, args=("ダウンロード", sid), kwargs=res["log"])
     if st.button("🔁 もういちど つくる", width="stretch"):
-        L.log("もういちど", sid, **res["log"])
+        _log("もういちど", sid, **res["log"])
         for k in ("result", "month", "color", "name"): st.session_state.pop(k, None)
         st.rerun()
 
