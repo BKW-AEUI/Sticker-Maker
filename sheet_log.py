@@ -5,11 +5,14 @@
 ・名前は記録しない（企画書の「個人情報を扱わない」を守るため）
 ・フォームの質問は1つだけ。中身は「|」区切りで送る（シート側のSPLITで列に分ける）"""
 import threading
+from datetime import datetime, timedelta, timezone
 import urllib.error
 import urllib.parse
 import urllib.request
 
 import streamlit as st
+
+JST = timezone(timedelta(hours=9))
 
 # 送る項目の順番（シートで列に分けるときの見出し）
 HEADERS = ["イベント", "セッション", "月", "日", "色", "★", "ポーズ", "小物", "診断名", "メモ"]
@@ -37,11 +40,11 @@ def _send(url, entry, text):
         data = urllib.parse.urlencode({entry: text}).encode("utf-8")
         req = urllib.request.Request(url, data=data, method="POST", headers={"User-Agent": "kyuta-log"})
         with urllib.request.urlopen(req, timeout=8) as r:
-            LAST = f"OK（送信 HTTP {r.status}）"
+            LAST = f"OK {datetime.now(JST):%H:%M:%S}（送信 HTTP {r.status}）"
     except urllib.error.HTTPError as e:
-        LAST = f"NG HTTP {e.code}（フォームのURLか、ログイン不要の設定を確認）"
+        LAST = f"NG {datetime.now(JST):%H:%M:%S} HTTP {e.code}（フォームのURLか、ログイン不要の設定を確認）"
     except Exception as e:
-        LAST = f"NG {type(e).__name__}: {str(e)[:120]}"
+        LAST = f"NG {datetime.now(JST):%H:%M:%S} {type(e).__name__}: {str(e)[:120]}"
 
 
 def log(event, sid, month="", day="", color="", rarity="", pose="", acc="", title="", memo=""):
@@ -53,9 +56,9 @@ def log(event, sid, month="", day="", color="", rarity="", pose="", acc="", titl
             LAST = "設定なし（Secrets未登録）→ 記録しません"
             return None
         text = "|".join(_clean(v) for v in [event, sid, month, day, color, rarity, pose, acc or "なし", title, memo])
+        LAST = "送信中…"                                   # 先に表示を変えておく（送信が先に終わっても上書きされない）
         t = threading.Thread(target=_send, args=(*cfg, text), daemon=True)   # 画面を待たせない
         t.start()
-        LAST = "送信中…"
         return t
     except Exception as e:                      # ログの失敗でアプリを止めない
         LAST = f"NG {type(e).__name__}: {str(e)[:150]}"

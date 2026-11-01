@@ -114,4 +114,7 @@ else:
         st.rerun()
 
 if st.query_params.get("debug"):                # URLの最後に ?debug=1 を付けると、記録の状態が見える（自分用）
-    st.caption(f"ログ: {L.LAST}")
+    @st.fragment(run_every=2)                   # 2秒ごとに自動で更新（送信の結果が出たら表示が変わる）
+    def _debug_status():
+        st.caption(f"ログ: {L.LAST}")
+    _debug_status()
